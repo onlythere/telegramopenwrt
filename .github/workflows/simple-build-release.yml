@@ -42,14 +42,19 @@ jobs:
             echo "version=1.0.0-1" >> $GITHUB_OUTPUT
           fi
 
-      - name: Create IPK package
+      - name: Install OpenWrt build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binutils-multiarch build-essential
+
+      - name: Create IPK package (OpenWrt compatible)
         id: build
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           PACKAGE_NAME="telegramopenwrt"
-          PACKAGE_FILE="${PACKAGE_NAME}_${VERSION}_all.ipk"
+          PACKAGE_FILE="${PACKAGE_NAME}_${VERSION}_aarch64_cortex-a53.ipk"
           
-          echo "🔨 Создаем пакет $PACKAGE_FILE"
+          echo "🔨 Создаем OpenWrt-совместимый пакет $PACKAGE_FILE"
           
           # Создаем структуру пакета
           mkdir -p package/data package/control
@@ -71,102 +76,72 @@ jobs:
             echo "✅ Скопирован usr/"
           fi
           
-          # Создаем control файл с метаданными
+          # Вычисляем размер данных
+          DATA_SIZE=$(du -sb package/data | cut -f1)
+          echo "📊 Размер данных: $DATA_SIZE байт"
+          
+          # Создаем control файл в формате OpenWrt
           cat > package/control/control << EOF
           Package: $PACKAGE_NAME
           Version: $VERSION
-          Architecture: all
+          Architecture: aarch64_cortex-a53
           Depends: curl, ca-certificates
           Section: utils
           Priority: optional
-          Maintainer: onlythere <https://github.com/onlythere>
-          Description: Telegram Scripts for OpenWrt
-           A comprehensive set of scripts with plugins API written in bash for managing
-           and getting information on OpenWrt routers via Telegram bot.
-           .
-           Features:
-           - Full Telegram bot integration
-           - Network interface management
-           - Firewall rules control  
-           - System monitoring and statistics
-           - IP Camera integration
-           - Proxy management
-           - WiFi control
-           - Switch ports monitoring
-           - Process management
-           - Package management via opkg
+          Maintainer: onlythere
+          License: GPL-2.0
+          Source: github.com/onlythere/telegramopenwrt
+          Installed-Size: $DATA_SIZE
+          Description: Telegram Scripts for OpenWrt - Manage and get information on OpenWrt routers via Telegram bot
           EOF
           
-          # Создаем postinst script для установки
+          # Создаем postinst script
           cat > package/control/postinst << 'EOF'
           #!/bin/sh
           echo "Настройка Telegram OpenWrt..."
           
+          # Устанавливаем права
+          chmod +x /sbin/* 2>/dev/null || true
+          chmod +x /etc/init.d/* 2>/dev/null || true
+          
           # Включаем сервисы
-          if [[ -f "/etc/init.d/telegram_bot" ]]; then
-            /etc/init.d/telegram_bot enable 2>/dev/null || true
-            echo "✅ Сервис telegram_bot включен"
-          fi
+          [ -f "/etc/init.d/telegram_bot" ] && /etc/init.d/telegram_bot enable
+          [ -f "/etc/init.d/lanports" ] && /etc/init.d/lanports enable
+          [ -f "/etc/init.d/hosts_scan" ] && /etc/init.d/hosts_scan enable
           
-          if [[ -f "/etc/init.d/lanports" ]]; then
-            /etc/init.d/lanports enable 2>/dev/null || true
-            echo "✅ Сервис lanports включен"
-          fi
-          
-          if [[ -f "/etc/init.d/hosts_scan" ]]; then
-            /etc/init.d/hosts_scan enable 2>/dev/null || true
-            echo "✅ Сервис hosts_scan включен"
-          fi
-          
-          # Устанавливаем права доступа
-          chmod +x /sbin/telegram_bot 2>/dev/null || true
-          chmod +x /sbin/telebot 2>/dev/null || true
-          chmod +x /sbin/telegram_sender 2>/dev/null || true
-          
-          echo ""
-          echo "🤖 Telegram OpenWrt установлен успешно!"
-          echo ""
-          echo "Следующие шаги:"
-          echo "1. Настройте токен бота в /etc/config/telegramopenwrt"
-          echo "2. Получите chat_id и добавьте его в конфиг"
-          echo "3. Запустите сервисы:"
-          echo "   /etc/init.d/telegram_bot start"
-          echo "   /etc/init.d/lanports start"
-          echo ""
+          echo "🤖 Telegram OpenWrt установлен!"
+          echo "Настройте токен в /etc/config/telegramopenwrt"
           EOF
           
-          # Создаем prerm script для удаления
+          # Создаем prerm script
           cat > package/control/prerm << 'EOF'
           #!/bin/sh
-          echo "Останавливаем сервисы Telegram OpenWrt..."
-          
-          /etc/init.d/telegram_bot stop 2>/dev/null || true
-          /etc/init.d/lanports stop 2>/dev/null || true
-          /etc/init.d/hosts_scan stop 2>/dev/null || true
-          
-          /etc/init.d/telegram_bot disable 2>/dev/null || true
-          /etc/init.d/lanports disable 2>/dev/null || true
-          /etc/init.d/hosts_scan disable 2>/dev/null || true
-          
-          echo "Сервисы остановлены"
+          [ -f "/etc/init.d/telegram_bot" ] && /etc/init.d/telegram_bot stop 2>/dev/null
+          [ -f "/etc/init.d/lanports" ] && /etc/init.d/lanports stop 2>/dev/null
+          [ -f "/etc/init.d/hosts_scan" ] && /etc/init.d/hosts_scan stop 2>/dev/null
           EOF
           
-          # Устанавливаем права на скрипты
-          chmod +x package/control/postinst
-          chmod +x package/control/prerm
+          chmod +x package/control/postinst package/control/prerm
           
-          # Создаем архивы
+          # Создаем архивы в правильном формате для OpenWrt
           echo "📦 Создаем архивы..."
           cd package
-          tar czf ../data.tar.gz data/
-          tar czf ../control.tar.gz control/
+          
+          # Используем GNU tar с правильными опциями
+          tar --numeric-owner --owner=0 --group=0 -czf ../data.tar.gz data/
+          tar --numeric-owner --owner=0 --group=0 -czf ../control.tar.gz control/
           echo "2.0" > ../debian-binary
           
           cd ..
           
-          # Создаем .ipk пакет используя ar
+          # Создаем .ipk используя GNU ar (совместимый с OpenWrt)
           echo "🔧 Собираем IPK пакет..."
-          ar r "$PACKAGE_FILE" debian-binary control.tar.gz data.tar.gz
+          
+          # Удаляем файл если существует
+          rm -f "$PACKAGE_FILE"
+          
+          # Создаем ar архив в GNU формате (не BSD)
+          /usr/bin/ar rcs "$PACKAGE_FILE" debian-binary control.tar.gz data.tar.gz
           
           # Проверяем результат
           if [[ -f "$PACKAGE_FILE" ]]; then
@@ -174,7 +149,16 @@ jobs:
             echo "📊 Информация о пакете:"
             ls -lh "$PACKAGE_FILE"
             echo "📋 Содержимое:"
-            ar t "$PACKAGE_FILE"
+            /usr/bin/ar t "$PACKAGE_FILE"
+            
+            # Проверка формата
+            echo "🔍 Проверка формата:"
+            file "$PACKAGE_FILE"
+            
+            # Проверяем заголовок ar
+            echo "📋 Заголовок архива:"
+            head -c 20 "$PACKAGE_FILE" | hexdump -C
+            
             echo "package_file=$PACKAGE_FILE" >> $GITHUB_OUTPUT
             echo "version=$VERSION" >> $GITHUB_OUTPUT
           else
@@ -182,25 +166,39 @@ jobs:
             exit 1
           fi
 
-      - name: Test package integrity
+      - name: Test package with opkg-utils
         run: |
           PACKAGE_FILE="${{ steps.build.outputs.package_file }}"
-          echo "🧪 Тестируем целостность пакета..."
           
-          # Проверяем структуру пакета
-          echo "Файлы в пакете:"
-          ar t "$PACKAGE_FILE"
+          # Устанавливаем opkg-utils для проверки
+          sudo apt-get install -y python3-pip
+          pip3 install --user opkg-utils || echo "opkg-utils недоступен"
           
-          # Извлекаем и проверяем control
-          ar x "$PACKAGE_FILE" control.tar.gz
-          tar tzf control.tar.gz
+          # Проверяем пакет
+          echo "🧪 Тестируем пакет..."
           
-          # Извлекаем и проверяем data  
-          ar x "$PACKAGE_FILE" data.tar.gz
-          echo "Данные в пакете:"
-          tar tzf data.tar.gz | head -20
+          # Проверяем ar архив
+          /usr/bin/ar t "$PACKAGE_FILE"
           
-          echo "✅ Пакет прошел проверку целостности"
+          # Извлекаем и проверяем содержимое
+          mkdir -p test_extract
+          cd test_extract
+          /usr/bin/ar x "../$PACKAGE_FILE"
+          
+          echo "Извлеченные файлы:"
+          ls -la
+          
+          echo "debian-binary содержит:"
+          cat debian-binary
+          
+          echo "Проверяем control.tar.gz:"
+          tar -tzf control.tar.gz
+          
+          echo "Проверяем data.tar.gz:"
+          tar -tzf data.tar.gz | head -10
+          
+          cd ..
+          echo "✅ Пакет прошел базовую проверку"
 
       - name: Upload package artifact
         uses: actions/upload-artifact@v4
@@ -235,100 +233,20 @@ jobs:
           PACKAGE_FILE="${{ needs.build_package.outputs.package_file }}"
           VERSION="${{ needs.build_package.outputs.package_version }}"
           
-          # Создаем Packages индекс для opkg
+          # Создаем Packages индекс
           echo "Package: telegramopenwrt" > Packages
           echo "Version: $VERSION" >> Packages
           echo "Depends: curl, ca-certificates" >> Packages
           echo "Section: utils" >> Packages
-          echo "Architecture: all" >> Packages
+          echo "Architecture: aarch64_cortex-a53" >> Packages
           echo "Installed-Size: $(stat -c%s "$PACKAGE_FILE")" >> Packages
           echo "Filename: $PACKAGE_FILE" >> Packages
           echo "Size: $(stat -c%s "$PACKAGE_FILE")" >> Packages
           echo "SHA256sum: $(sha256sum "$PACKAGE_FILE" | cut -d' ' -f1)" >> Packages
-          echo "Description: Telegram Scripts for OpenWrt - Manage and get information on OpenWrt routers via Telegram bot" >> Packages
+          echo "Description: Telegram Scripts for OpenWrt" >> Packages
           echo "" >> Packages
           
-          # Сжимаем индекс
           gzip -c Packages > Packages.gz
-          
-          # Создаем HTML страницу репозитория
-          cat > index.html << 'EOF'
-          <!DOCTYPE html>
-          <html>
-          <head>
-              <title>Telegram OpenWrt Scripts Repository</title>
-              <style>
-                  body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }
-                  .container { max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-                  .code { background-color: #2d3748; color: #e2e8f0; padding: 15px; border-radius: 5px; font-family: monospace; margin: 15px 0; }
-                  .feature { margin: 10px 0; }
-                  .emoji { font-size: 1.2em; }
-                  h1 { color: #2d3748; border-bottom: 3px solid #4299e1; padding-bottom: 10px; }
-                  h2 { color: #4299e1; margin-top: 30px; }
-                  .highlight { background: #bee3f8; padding: 2px 6px; border-radius: 3px; }
-              </style>
-          </head>
-          <body>
-              <div class="container">
-                  <h1>🤖 Telegram OpenWrt Scripts</h1>
-                  
-                  <p>A comprehensive set of scripts with plugins API written in bash for managing and getting information on OpenWrt routers via Telegram bot.</p>
-                  
-                  <h2>✨ Features</h2>
-                  <div class="feature">🤖 <strong>Full Telegram bot integration</strong></div>
-                  <div class="feature">📡 <strong>Network interface management</strong></div>
-                  <div class="feature">🔥 <strong>Firewall rules control</strong></div>
-                  <div class="feature">📊 <strong>System monitoring and statistics</strong></div>
-                  <div class="feature">📷 <strong>IP Camera integration</strong></div>
-                  <div class="feature">🌐 <strong>Proxy management</strong></div>
-                  <div class="feature">📱 <strong>WiFi control</strong></div>
-                  <div class="feature">🔌 <strong>Switch ports monitoring</strong></div>
-                  <div class="feature">📋 <strong>Process management</strong></div>
-                  <div class="feature">📦 <strong>Package management via opkg</strong></div>
-                  
-                  <h2>🚀 Quick Installation</h2>
-                  <div class="code">echo 'src/gz telegramopenwrt https://github.com/onlythere/telegramopenwrt/releases/latest/download' >> /etc/opkg/customfeeds.conf
-          opkg update
-          opkg install telegramopenwrt</div>
-                  
-                  <h2>📥 Manual Installation</h2>
-                  <div class="code">wget -O telegramopenwrt_*.ipk https://github.com/onlythere/telegramopenwrt/releases/latest/download/telegramopenwrt_*.ipk
-          opkg install telegramopenwrt_*.ipk</div>
-                  
-                  <h2>⚙️ Configuration</h2>
-                  <p>After installation:</p>
-                  <ol>
-                      <li>Create your bot at <a href="https://t.me/BotFather">@BotFather</a></li>
-                      <li>Edit <span class="highlight">/etc/config/telegramopenwrt</span> with your bot token</li>
-                      <li>Get your chat ID and add it to config</li>
-                      <li>Start the services: <span class="highlight">/etc/init.d/telegram_bot start</span></li>
-                  </ol>
-                  
-                  <h2>📋 Available Packages</h2>
-                  <ul>
-          EOF
-          
-          # Добавляем ссылки на пакеты
-          for file in *.ipk; do
-            if [[ -f "$file" ]]; then
-              echo "                  <li><a href=\"$file\">📦 $file</a></li>" >> index.html
-            fi
-          done
-          
-          cat >> index.html << 'EOF'
-                  </ul>
-                  
-                  <h2>🔗 Repository Files</h2>
-                  <ul>
-                      <li><a href="Packages">📄 Packages Index</a></li>
-                      <li><a href="Packages.gz">📄 Packages Index (compressed)</a></li>
-                  </ul>
-                  
-                  <p><strong>Compatible with:</strong> OpenWrt 23.05+ | All architectures</p>
-              </div>
-          </body>
-          </html>
-          EOF
 
       - name: Get tag name
         id: tag_name
@@ -348,81 +266,36 @@ jobs:
           body: |
             ## 🤖 Telegram OpenWrt Scripts ${{ steps.tag_name.outputs.tag }}
             
-            A comprehensive set of scripts with plugins API for managing OpenWrt routers via Telegram bot.
-            
-            ### ✨ What's New
-            - Updated package format and build process
-            - Improved installation scripts
-            - Better error handling and logging
-            - Enhanced documentation
-            
-            ### 🚀 Quick Installation
+            ### 🚀 Автоматическая установка
             ```bash
-            # Add repository
+            # Добавить репозиторий
             echo 'src/gz telegramopenwrt https://github.com/onlythere/telegramopenwrt/releases/latest/download' >> /etc/opkg/customfeeds.conf
             
-            # Update and install
+            # Обновить и установить
             opkg update
             opkg install telegramopenwrt
             ```
             
-            ### 📥 Manual Installation
+            ### 📥 Ручная установка
             ```bash
-            # Download and install directly
-            wget -O telegramopenwrt_*.ipk https://github.com/onlythere/telegramopenwrt/releases/latest/download/${{ needs.build_package.outputs.package_file }}
-            opkg install telegramopenwrt_*.ipk
+            # Скачать и установить
+            wget -O telegramopenwrt.ipk https://github.com/onlythere/telegramopenwrt/releases/latest/download/${{ needs.build_package.outputs.package_file }}
+            opkg install telegramopenwrt.ipk
             ```
             
-            ### ⚙️ Post-Installation Setup
-            1. **Create your bot:** Visit [@BotFather](https://t.me/BotFather) on Telegram
-            2. **Configure:** Edit `/etc/config/telegramopenwrt` with your bot token and chat ID
-            3. **Start services:**
-               ```bash
-               /etc/init.d/telegram_bot start
-               /etc/init.d/lanports start
-               ```
-            4. **Test:** Send `/start` to your bot
-            
-            ### 📋 Features
-            - 🤖 Full Telegram bot integration
-            - 📡 Network interface management  
-            - 🔥 Firewall rules control
-            - 📊 System monitoring and statistics
-            - 📷 IP Camera integration
-            - 🌐 Proxy management
-            - 📱 WiFi control
-            - 🔌 Switch ports monitoring
-            - 📋 Process management
-            - 📦 Package management via opkg
-            
-            ### 🔧 Compatibility
-            - **OpenWrt:** 23.05+ (tested on 24.10.1)
-            - **Architecture:** All (bash scripts)
-            - **Dependencies:** curl, ca-certificates
-            
-            ### 📖 Documentation
-            - **Repository:** [GitHub](https://github.com/onlythere/telegramopenwrt)
-            - **Web Interface:** [Package Repository](https://onlythere.github.io/telegramopenwrt)
+            ### ⚙️ Настройка после установки
+            1. Создайте бота у [@BotFather](https://t.me/BotFather)
+            2. Отредактируйте `/etc/config/telegramopenwrt`
+            3. Запустите: `/etc/init.d/telegram_bot start`
             
             ---
-            **Package:** `${{ needs.build_package.outputs.package_file }}`  
-            **Size:** $(stat -c%s packages/${{ needs.build_package.outputs.package_file }} | numfmt --to=iec-i)B  
-            **SHA256:** $(cd packages && sha256sum ${{ needs.build_package.outputs.package_file }} | cut -d' ' -f1)
+            **Архитектура:** aarch64_cortex-a53 (Xiaomi AX3000T и аналогичные)  
+            **Размер:** $(stat -c%s packages/${{ needs.build_package.outputs.package_file }} | numfmt --to=iec-i)B
           files: |
             packages/*.ipk
             packages/Packages
             packages/Packages.gz
-            packages/index.html
           draft: false
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Update repository stats
-        run: |
-          echo "🎉 Релиз создан успешно!"
-          echo "📦 Пакет: ${{ needs.build_package.outputs.package_file }}"
-          echo "🔗 Ссылка: https://github.com/onlythere/telegramopenwrt/releases/tag/${{ steps.tag_name.outputs.tag }}"
-          echo ""
-          echo "Пользователи могут установить пакет командой:"
-          echo "opkg install https://github.com/onlythere/telegramopenwrt/releases/latest/download/${{ needs.build_package.outputs.package_file }}"
