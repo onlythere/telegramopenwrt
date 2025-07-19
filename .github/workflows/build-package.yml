@@ -1,159 +1,426 @@
-# Nome do Workflow: Exibido na interface do GitHub Actions
-name: Build telegram-openwrt Package
+name: Build and Release Telegram OpenWrt Package
 
-# Gatilhos (Triggers): Quando este workflow será executado
 on:
   push:
     branches:
-      - master # Branch principal do seu repositório telegramopenwrt
-      # Se você usa 'main' ou outra branch, ajuste aqui.
-  # Permite acionamento manual a partir da aba "Actions" do GitHub
+      - master
+    tags:
+      - 'v*'
   workflow_dispatch:
     inputs:
       openwrt_version:
-        description: 'Versão do OpenWrt ou "snapshots"'
+        description: 'Версия OpenWrt или "snapshots"'
         required: true
-        default: 'v24.10.1' # Sugestão de uma versão estável recente
+        default: 'v24.10.1'
       target_architecture:
-        description: 'Target OpenWrt (ex: x86/64, mediatek/filogic, ou deixe em branco para x86/64 padrão)'
+        description: 'Target OpenWrt'
         required: false
-        default: 'mediatek/filogic' # Target genérico para compilar pacotes .ipk
+        default: 'mediatek/filogic'
+      create_release:
+        description: 'Создать релиз?'
+        type: boolean
+        default: false
 
-# Jobs: Define um ou mais trabalhos a serem executados
 jobs:
   build_package:
-    name: Build for OpenWrt ${{ github.event.inputs.openwrt_version || 'v24.10.1' }} (${{ github.event.inputs.target_architecture || 'x86/64' }})
+    name: Build for OpenWrt ${{ github.event.inputs.openwrt_version || 'v24.10.1' }} (${{ github.event.inputs.target_architecture || 'mediatek/filogic' }})
     runs-on: ubuntu-22.04
 
     env:
-      # Variáveis de ambiente disponíveis para todas as etapas deste job
-      PACKAGE_NAME: telegram-openwrt # Nome do seu pacote (com hífen)
-      # Define a versão do OpenWrt. Usa o input do workflow_dispatch ou um padrão.
+      PACKAGE_NAME: telegramopenwrt
       OPENWRT_VERSION: ${{ github.event.inputs.openwrt_version || 'v24.10.1' }}
-      # Define o target. Usa o input ou um padrão.
       TARGET_ARCH_INPUT: ${{ github.event.inputs.target_architecture || 'mediatek/filogic' }}
 
+    outputs:
+      package_files: ${{ steps.find_packages.outputs.files }}
+      package_version: ${{ steps.extract_version.outputs.version }}
+
     steps:
-      # Etapa 1: Checkout do código do seu pacote telegram-openwrt
       - name: Checkout telegram-openwrt package repository
         uses: actions/checkout@v4
 
-      # Etapa 2: Instalação das dependências de compilação do OpenWrt no executor Ubuntu
       - name: Install OpenWrt build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential clang flex bison g++ gawk \
             gcc-multilib g++-multilib gettext git libncurses5-dev \
-            libssl-dev python3 python3-distutils rsync \
-            unzip zlib1g-dev file wget subversion ca-certificates
+            libssl-dev python3 python3-setuptools python3-dev rsync \
+            unzip zlib1g-dev file wget subversion ca-certificates \
+            python3-yaml python3-pip libpython3-dev time \
+            libelf-dev libfuse-dev
 
-      # Etapa 3: Configuração do ambiente de compilação do OpenWrt SDK
       - name: Setup OpenWrt build environment
         run: |
-          echo "Usando OpenWrt versão/branch: ${OPENWRT_VERSION}"
-          if [[ "${OPENWRT_VERSION}" == "snapshots" ]]; then
-            # Para snapshots, clonamos a branch master (ou a principal de desenvolvimento)
-            git clone https://github.com/openwrt/openwrt.git --depth 1 openwrt_sdk
+          echo "Используем OpenWrt версию: ${OPENWRT_VERSION}"
+          
+          # Определяем архитектуру для SDK
+          if [[ "${TARGET_ARCH_INPUT}" == "mediatek/filogic" ]]; then
+            SDK_ARCH="mediatek-filogic"
+            SDK_TARGET="aarch64_cortex-a53"
+          elif [[ "${TARGET_ARCH_INPUT}" == "x86/64" ]]; then
+            SDK_ARCH="x86-64"
+            SDK_TARGET="x86_64"
           else
-            # Para releases, clonamos a tag específica
-            git clone https://github.com/openwrt/openwrt.git -b ${OPENWRT_VERSION} --depth 1 openwrt_sdk
+            SDK_ARCH="mediatek-filogic"
+            SDK_TARGET="aarch64_cortex-a53"
           fi
+          
+          # Скачиваем готовый SDK вместо компиляции с нуля
+          if [[ "${OPENWRT_VERSION}" == "snapshots" ]]; then
+            SDK_URL="https://downloads.openwrt.org/snapshots/targets/${TARGET_ARCH_INPUT}/openwrt-sdk-${SDK_ARCH}_gcc-13.3.0_musl.Linux-x86_64.tar.xz"
+          else
+            # Для релизных версий
+            VERSION_NUM=${OPENWRT_VERSION#v}
+            SDK_URL="https://downloads.openwrt.org/releases/${VERSION_NUM}/targets/${TARGET_ARCH_INPUT}/openwrt-sdk-${VERSION_NUM}-${SDK_ARCH}_gcc-11.2.0_musl.Linux-x86_64.tar.xz"
+          fi
+          
+          echo "Скачиваем SDK: $SDK_URL"
+          wget -O openwrt-sdk.tar.xz "$SDK_URL" || {
+            echo "Не удалось скачать SDK, пробуем альтернативный способ..."
+            # Fallback к исходному коду для пакетов
+            git clone https://github.com/openwrt/openwrt.git -b ${OPENWRT_VERSION} --depth 1 openwrt_sdk
+            cd openwrt_sdk
+            
+            # Простая конфигурация без полной сборки toolchain
+            make menuconfig TOPDIR=. CONFIG_AUTOCONFIG=y CONFIG_AUTOREMOVE=y
+            exit 0
+          }
+          
+          # Распаковываем SDK
+          tar -xf openwrt-sdk.tar.xz
+          mv openwrt-sdk-* openwrt_sdk
           cd openwrt_sdk
 
-          echo "Atualizando e instalando feeds..."
+          # Обновляем feeds
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-          echo "Copiando código do pacote ${PACKAGE_NAME}..."
+          echo "Копируем код пакета ${PACKAGE_NAME}..."
           mkdir -p package/${PACKAGE_NAME}
-          # GITHUB_WORKSPACE é o diretório onde o seu repo (alexwbaule/telegramopenwrt) foi clonado
-          cp -R ${GITHUB_WORKSPACE}/* package/${PACKAGE_NAME}/
-          echo "Conteúdo copiado para package/${PACKAGE_NAME}:"
-          ls -lA package/${PACKAGE_NAME}
-
-          echo "Gerando configuração .config para target: ${TARGET_ARCH_INPUT}..."
-          # Configuração do .config baseada no input TARGET_ARCH_INPUT
-          # Exemplos:
-          # 'x86/64' -> CONFIG_TARGET_x86=y, CONFIG_TARGET_x86_64=y, CONFIG_TARGET_x86_64_DEVICE_generic=y
-          # 'mediatek/filogic' -> CONFIG_TARGET_mediatek=y, CONFIG_TARGET_mediatek_filogic=y (precisaria de um DEVICE específico)
-          # 'ath79/generic' -> CONFIG_TARGET_ath79=y, CONFIG_TARGET_ath79_generic=y
           
-          # NOTA: Para gerar pacotes .apk, você DEVE selecionar um target que sabidamente os utilize
-          # em snapshots (ex: mediatek/filogic). A configuração abaixo é um exemplo para x86/64 (gera .ipk).
-          # Adapte esta seção CUIDADOSAMENTE para o target desejado.
-          
-          # Limpa o .config para começar
-          echo "" > .config
-
-          if [[ "${TARGET_ARCH_INPUT}" == "x86/64" ]]; then
-            echo "CONFIG_TARGET_x86=y" >> .config
-            echo "CONFIG_TARGET_x86_64=y" >> .config
-            echo "CONFIG_TARGET_x86_64_DEVICE_generic=y" >> .config
-          elif [[ "${TARGET_ARCH_INPUT}" == "ath79/generic" ]]; then
-            echo "CONFIG_TARGET_ath79=y" >> .config
-            echo "CONFIG_TARGET_ath79_generic=y" >> .config
-            echo "CONFIG_TARGET_BOARD=\"generic\"" >> .config
-          elif [[ "${TARGET_ARCH_INPUT}" == "mediatek/filogic" ]]; then
-            # Exemplo para mediatek/filogic - você precisará de um DEVICE específico.
-            # Este é um placeholder e provavelmente precisará de ajuste para um device real.
-            echo "CONFIG_TARGET_mediatek=y" >> .config
-            echo "CONFIG_TARGET_mediatek_filogic=y" >> .config
-            echo "CONFIG_TARGET_mediatek_filogic_DEVICE_generic=y" >> .config # Substitua 'generic' por um device válido se necessário
-            echo "CONFIG_ALL_KMODS=y" >> .config # Pode ser necessário para alguns targets de snapshot
-            echo "CONFIG_ALL_NONSHARED=y" >> .config
+          # Используем rsync для копирования с исключениями
+          if rsync -av --exclude='openwrt_sdk' --exclude='.git' --exclude='.github' \
+            ${GITHUB_WORKSPACE}/ package/${PACKAGE_NAME}/; then
+            echo "✅ Файлы успешно скопированы"
           else
-            echo "::warning::Target não configurado explicitamente no workflow: ${TARGET_ARCH_INPUT}. Usando fallback para seleção manual ou erro."
-            # Poderia adicionar uma configuração padrão ou falhar aqui
+            echo "❌ Ошибка копирования файлов"
+            exit 1
           fi
           
-          # Seleciona o seu pacote para ser compilado como 'm' (módulo/pacote)
-          # Hífens no nome do pacote são convertidos para underscores para CONFIG_PACKAGE_*
-          CONFIG_PKG_NAME="CONFIG_PACKAGE_${PACKAGE_NAME//-/_}"
-          echo "${CONFIG_PKG_NAME}=m" >> .config
+          echo "Содержимое скопировано в package/${PACKAGE_NAME}:"
+          ls -lA package/${PACKAGE_NAME}
           
-          echo "Rodando make defconfig..."
-          make defconfig
-          
-          echo "Configuração gerada (.config). Verificando seleção do pacote e dependências (curl, jq, libustream-openssl):"
-          grep -E "${CONFIG_PKG_NAME}|CONFIG_PACKAGE_curl|CONFIG_PACKAGE_jq|CONFIG_PACKAGE_libustream_openssl" .config || echo "Algumas dependências podem não estar explicitamente no .config se forem parte do perfil do target."
+          # Проверяем наличие Makefile
+          if [[ -f "package/${PACKAGE_NAME}/Makefile" ]]; then
+            echo "✅ Makefile найден"
+          else
+            echo "❌ Makefile не найден в пакете!"
+            exit 1
+          fi
 
-      # Etapa 4: Compilação do pacote especificado
-      - name: Compile the ${PACKAGE_NAME} package
-        id: compile_step # ID para referenciar o status desta etapa
+          echo "" > .config
+          
+          # Простая конфигурация для SDK
+          echo "CONFIG_DEVEL=y" >> .config
+          echo "CONFIG_TOOLCHAINOPTS=y" >> .config
+          echo "CONFIG_PACKAGE_${PACKAGE_NAME//-/_}=m" >> .config
+          
+          # Зависимости
+          echo "CONFIG_PACKAGE_curl=y" >> .config
+          echo "CONFIG_PACKAGE_ca_certificates=y" >> .config
+          
+          make defconfig V=s
+
+      - name: Compile the package
+        id: compile_step
         run: |
           cd openwrt_sdk
-          echo "Iniciando compilação do pacote ${PACKAGE_NAME}..."
-          # V=s mostra mais detalhes da compilação (útil para depuração)
-          # O comando make package/<nome>/compile constrói apenas o pacote e suas dependências.
-          if make package/${PACKAGE_NAME}/compile V=s -j$(nproc); then
-            echo "Compilação do pacote concluída com sucesso."
-            echo "::set-output name=status::success"
-            echo "Verificando arquivos de pacote gerados..."
-            echo "Arquivos .ipk encontrados:"
-            find bin/packages/ -name "${PACKAGE_NAME}*.ipk" -print || true
-            echo "Arquivos .apk encontrados:"
-            find bin/packages/ -name "${PACKAGE_NAME}*.apk" -print || true
+          
+          # Проверяем, есть ли готовый toolchain
+          if [[ -d "staging_dir/toolchain-"* ]]; then
+            echo "✅ Используем готовый SDK"
+            if make package/${PACKAGE_NAME}/compile V=s -j$(nproc); then
+              echo "status=success" >> $GITHUB_OUTPUT
+            else
+              echo "status=failure" >> $GITHUB_OUTPUT
+              exit 1
+            fi
           else
-            echo "::error::Compilação do pacote ${PACKAGE_NAME} falhou."
-            echo "::set-output name=status::failure"
-            exit 1 # Falha o workflow se a compilação falhar
+            echo "⚠️ SDK не найден, пробуем минимальную сборку"
+            # Минимальная сборка только пакета без toolchain
+            if make package/${PACKAGE_NAME}/prepare V=s && \
+               make package/${PACKAGE_NAME}/compile V=s -j1; then
+              echo "status=success" >> $GITHUB_OUTPUT
+            else
+              echo "❌ Сборка не удалась"
+              echo "status=failure" >> $GITHUB_OUTPUT
+              exit 1
+            fi
           fi
 
-      # Etapa 5: Upload do pacote compilado como um artefato do GitHub Actions
-      - name: Upload ${PACKAGE_NAME} package artifact
-        # Executa apenas se a etapa de compilação (id: compile_step) foi bem-sucedida
+      - name: Find package files
+        id: find_packages
+        if: steps.compile_step.outputs.status == 'success'
+        run: |
+          cd openwrt_sdk
+          files=$(find bin/packages/ -name "${PACKAGE_NAME}*.ipk" -o -name "${PACKAGE_NAME}*.apk" | tr '\n' ' ')
+          echo "files=$files" >> $GITHUB_OUTPUT
+          echo "Найденные пакеты: $files"
+
+      - name: Extract version from package
+        id: extract_version
+        if: steps.compile_step.outputs.status == 'success'
+        run: |
+          cd openwrt_sdk
+          pkg_file=$(find bin/packages/ -name "${PACKAGE_NAME}*.ipk" -o -name "${PACKAGE_NAME}*.apk" | head -1)
+          if [[ -n "$pkg_file" ]]; then
+            version=$(basename "$pkg_file" | sed -n 's/.*_\([0-9]\+\.[0-9]\+\.[0-9]\+-[0-9]\+\)_.*/\1/p')
+            if [[ -z "$version" ]]; then
+              version="1.0.0-1"
+            fi
+            echo "version=$version" >> $GITHUB_OUTPUT
+            echo "Версия пакета: $version"
+          fi
+
+      - name: Upload package artifacts
         if: steps.compile_step.outputs.status == 'success'
         uses: actions/upload-artifact@v4
         with:
-          # Nome do artefato que será exibido no GitHub
           name: ${{ env.PACKAGE_NAME }}-package-${{ env.OPENWRT_VERSION }}-${{ env.TARGET_ARCH_INPUT }}
-          # Caminhos para os arquivos a serem incluídos no artefato
-          # Procura por .ipk e .apk para cobrir ambos os formatos
           path: |
             openwrt_sdk/bin/packages/*/*/${{ env.PACKAGE_NAME }}*.ipk
             openwrt_sdk/bin/packages/*/*/*/${{ env.PACKAGE_NAME }}*.ipk
             openwrt_sdk/bin/packages/*/*/${{ env.PACKAGE_NAME }}*.apk
             openwrt_sdk/bin/packages/*/*/*/${{ env.PACKAGE_NAME }}*.apk
-          # O que fazer se nenhum arquivo for encontrado nos paths especificados
-          if-no-files-found: error # Gera um erro se nenhum pacote for encontradoi
+          if-no-files-found: error
+
+  create_release:
+    name: Create Release
+    needs: build_package
+    runs-on: ubuntu-22.04
+    if: |
+      needs.build_package.result == 'success' && (
+        startsWith(github.ref, 'refs/tags/v') ||
+        github.event.inputs.create_release == 'true'
+      )
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: telegramopenwrt-package-*
+          merge-multiple: true
+          path: ./packages
+
+      - name: Create package index
+        run: |
+          cd packages
+          
+          # Создаем индекс пакетов для opkg
+          echo "Package: telegramopenwrt" > Packages
+          echo "Version: ${{ needs.build_package.outputs.package_version }}" >> Packages
+          echo "Depends: curl, ca-certificates" >> Packages
+          echo "Section: utils" >> Packages
+          echo "Architecture: aarch64_cortex-a53" >> Packages
+          echo "Installed-Size: 2048" >> Packages
+          echo "Filename: $(ls *.ipk *.apk 2>/dev/null | head -1)" >> Packages
+          echo "Size: $(stat -c%s $(ls *.ipk *.apk 2>/dev/null | head -1) 2>/dev/null || echo 2048)" >> Packages
+          echo "SHA256sum: $(sha256sum $(ls *.ipk *.apk 2>/dev/null | head -1) | cut -d' ' -f1)" >> Packages
+          echo "Description: Telegram Scripts for OpenWrt - Manage and get information on OpenWrt routers via Telegram bot" >> Packages
+          echo "" >> Packages
+          
+          # Сжимаем индекс
+          gzip -c Packages > Packages.gz
+          
+          # Создаем простой HTML индекс
+          echo "<html><head><title>OpenWrt Packages Repository</title></head><body>" > index.html
+          echo "<h1>Telegram OpenWrt Scripts Repository</h1>" >> index.html
+          echo "<p>A set of scripts with a plugins API written in bash to manage and get information on OpenWrt routers via Telegram bot.</p>" >> index.html
+          echo "<h2>Available Packages:</h2><ul>" >> index.html
+          for file in *.ipk *.apk; do
+            if [[ -f "$file" ]]; then
+              echo "<li><a href=\"$file\">$file</a></li>" >> index.html
+            fi
+          done
+          echo "</ul>" >> index.html
+          echo "<h2>Installation:</h2>" >> index.html
+          echo "<pre>echo 'src/gz telegramopenwrt https://github.com/onlythere/telegramopenwrt/releases/latest/download' >> /etc/opkg/customfeeds.conf" >> index.html
+          echo "opkg update" >> index.html
+          echo "opkg install telegramopenwrt</pre>" >> index.html
+          echo "</body></html>" >> index.html
+
+      - name: Get tag name or create one
+        id: tag_name
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          else
+            # Создаем тег на основе версии пакета
+            tag="v${{ needs.build_package.outputs.package_version }}"
+            echo "tag=$tag" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag_name.outputs.tag }}
+          name: "Release ${{ steps.tag_name.outputs.tag }}"
+          body: |
+            ## Telegram OpenWrt Scripts ${{ steps.tag_name.outputs.tag }}
+            
+            A comprehensive set of scripts with plugins API for managing OpenWrt routers via Telegram bot.
+            
+            ### Features
+            - 🤖 Full Telegram bot integration
+            - 📡 Network interface management  
+            - 🔥 Firewall rules control
+            - 📊 System monitoring and statistics
+            - 📷 IP Camera integration
+            - 🌐 Proxy management
+            - 📱 WiFi control
+            - 🔌 Switch ports monitoring
+            - 📋 Process management
+            - 📦 Package management via opkg
+            
+            ### Installation
+            ```bash
+            # Add repository
+            echo 'src/gz telegramopenwrt https://github.com/onlythere/telegramopenwrt/releases/latest/download' >> /etc/opkg/customfeeds.conf
+            
+            # Update and install
+            opkg update
+            opkg install telegramopenwrt
+            ```
+            
+            ### Manual Installation
+            ```bash
+            # Download and install directly
+            wget https://github.com/onlythere/telegramopenwrt/releases/latest/download/telegramopenwrt_*.ipk
+            opkg install telegramopenwrt_*.ipk
+            ```
+            
+            ### Compatible with:
+            - OpenWrt ${{ env.OPENWRT_VERSION }}
+            - Architecture: ${{ env.TARGET_ARCH_INPUT }}
+            - Device: Xiaomi Mi Router AX3000T
+          files: |
+            packages/*.ipk
+            packages/*.apk
+            packages/Packages
+            packages/Packages.gz
+            packages/index.html
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  deploy_repository:
+    name: Deploy Package Repository
+    needs: [build_package, create_release]
+    runs-on: ubuntu-22.04
+    if: |
+      needs.build_package.result == 'success' && 
+      needs.create_release.result == 'success'
+
+    steps:
+      - name: Checkout packages branch
+        uses: actions/checkout@v4
+        with:
+          ref: packages
+          token: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+
+      - name: Create packages branch if not exists
+        if: failure()
+        run: |
+          git checkout --orphan packages
+          git rm -rf .
+          echo "# OpenWrt Packages Repository" > README.md
+          git add README.md
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git commit -m "Initialize packages branch"
+          git push origin packages
+
+      - name: Download release artifacts
+        run: |
+          mkdir -p packages/mediatek/filogic packages/x86/64
+          
+          # Скачиваем файлы из последнего релиза
+          latest_release=$(curl -s https://api.github.com/repos/onlythere/telegramopenwrt/releases/latest | jq -r .tag_name)
+          
+          # Скачиваем пакеты
+          wget -P packages/mediatek/filogic/ https://github.com/onlythere/telegramopenwrt/releases/latest/download/Packages || true
+          wget -P packages/mediatek/filogic/ https://github.com/onlythere/telegramopenwrt/releases/latest/download/Packages.gz || true
+          
+          # Скачиваем все .ipk и .apk файлы
+          curl -s https://api.github.com/repos/onlythere/telegramopenwrt/releases/latest \
+            | jq -r '.assets[] | select(.name | endswith(".ipk") or endswith(".apk")) | .browser_download_url' \
+            | while read url; do
+                wget -P packages/mediatek/filogic/ "$url" || true
+              done
+
+      - name: Update repository index
+        run: |
+          cd packages
+          
+          # Создаем общий индекс
+          cat > index.html << 'EOF'
+          <!DOCTYPE html>
+          <html>
+          <head>
+              <title>Custom OpenWrt Package Repository</title>
+              <style>
+                  body { font-family: Arial, sans-serif; margin: 40px; }
+                  .code { background-color: #f4f4f4; padding: 10px; border-radius: 5px; }
+                  .architecture { margin: 20px 0; }
+              </style>
+          </head>
+          <body>
+              <h1>Telegram OpenWrt Scripts Repository</h1>
+              
+              <p>A comprehensive set of scripts with plugins API for managing OpenWrt routers via Telegram bot.</p>
+              
+              <h2>Quick Installation</h2>
+              <div class="code">
+                  <pre>echo 'src/gz telegramopenwrt https://github.com/onlythere/telegramopenwrt/releases/latest/download' >> /etc/opkg/customfeeds.conf
+          opkg update
+          opkg install telegramopenwrt</pre>
+              </div>
+              
+              <h2>Available Architectures</h2>
+              <div class="architecture">
+                  <h3>MediaTek/Filogic (ARM64)</h3>
+                  <p>For routers like: Xiaomi AX3000T, AX6000, etc.</p>
+                  <ul>
+          EOF
+          
+          # Добавляем ссылки на пакеты
+          find mediatek/filogic/ -name "*.ipk" -o -name "*.apk" | while read file; do
+            echo "                  <li><a href=\"$file\">$(basename "$file")</a></li>" >> index.html
+          done
+          
+          cat >> index.html << 'EOF'
+                  </ul>
+              </div>
+              
+              <h2>Repository Structure</h2>
+              <ul>
+                  <li><a href="mediatek/filogic/Packages">Packages Index</a></li>
+                  <li><a href="mediatek/filogic/Packages.gz">Packages Index (compressed)</a></li>
+              </ul>
+          </body>
+          </html>
+          EOF
+
+      - name: Commit and push changes
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add .
+          git commit -m "Update packages from release ${{ needs.create_release.result }}" || exit 0
+          git push origin packages
