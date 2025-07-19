@@ -15,7 +15,7 @@ on:
       version:
         description: 'Версия пакета (например: 1.0.0-1)'
         required: false
-        default: '0.0.1-1'
+        default: '1.0.0-1'
 
 jobs:
   build_package:
@@ -292,7 +292,7 @@ jobs:
           opkg install telegramopenwrt</div>
                   
                   <h2>📥 Manual Installation</h2>
-                  <div class="code">wget https://github.com/onlythere/telegramopenwrt/releases/latest/download/telegramopenwrt_*.ipk
+                  <div class="code">wget -O telegramopenwrt_*.ipk https://github.com/onlythere/telegramopenwrt/releases/latest/download/telegramopenwrt_*.ipk
           opkg install telegramopenwrt_*.ipk</div>
                   
                   <h2>⚙️ Configuration</h2>
@@ -369,8 +369,8 @@ jobs:
             ### 📥 Manual Installation
             ```bash
             # Download and install directly
-            wget https://github.com/onlythere/telegramopenwrt/releases/latest/download/${{ needs.build_package.outputs.package_file }}
-            opkg install ${{ needs.build_package.outputs.package_file }}
+            wget -O telegramopenwrt_*.ipk https://github.com/onlythere/telegramopenwrt/releases/latest/download/${{ needs.build_package.outputs.package_file }}
+            opkg install telegramopenwrt_*.ipk
             ```
             
             ### ⚙️ Post-Installation Setup
