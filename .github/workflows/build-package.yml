@@ -22,16 +22,16 @@ on:
 # Jobs: Define um ou mais trabalhos a serem executados
 jobs:
   build_package:
-    name: Build for OpenWrt ${{ github.event.inputs.openwrt_version || 'v23.05.3' }} (${{ github.event.inputs.target_architecture || 'x86/64' }})
-    runs-on: ubuntu-latest # Ambiente de execução
+    name: Build for OpenWrt ${{ github.event.inputs.openwrt_version || 'v24.10.1' }} (${{ github.event.inputs.target_architecture || 'x86/64' }})
+    runs-on: ubuntu-22.04
 
     env:
       # Variáveis de ambiente disponíveis para todas as etapas deste job
       PACKAGE_NAME: telegram-openwrt # Nome do seu pacote (com hífen)
       # Define a versão do OpenWrt. Usa o input do workflow_dispatch ou um padrão.
-      OPENWRT_VERSION: ${{ github.event.inputs.openwrt_version || 'v23.05.3' }}
+      OPENWRT_VERSION: ${{ github.event.inputs.openwrt_version || 'v24.10.1' }}
       # Define o target. Usa o input ou um padrão.
-      TARGET_ARCH_INPUT: ${{ github.event.inputs.target_architecture || 'x86/64' }}
+      TARGET_ARCH_INPUT: ${{ github.event.inputs.target_architecture || 'mediatek/filogic' }}
 
     steps:
       # Etapa 1: Checkout do código do seu pacote telegram-openwrt
