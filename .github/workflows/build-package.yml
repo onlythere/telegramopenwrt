@@ -77,24 +77,31 @@ jobs:
           
           echo "Скачиваем SDK: $SDK_URL"
           wget -O openwrt-sdk.tar.xz "$SDK_URL" || {
-            echo "Не удалось скачать SDK, пробуем альтернативный способ..."
-            # Fallback к исходному коду для пакетов
+            echo "Не удалось скачать SDK, используем исходный код..."
+            # Fallback к исходному коду
             git clone https://github.com/openwrt/openwrt.git -b ${OPENWRT_VERSION} --depth 1 openwrt_sdk
             cd openwrt_sdk
             
-            # Простая конфигурация без полной сборки toolchain
-            make menuconfig TOPDIR=. CONFIG_AUTOCONFIG=y CONFIG_AUTOREMOVE=y
-            exit 0
+            # Обновляем feeds
+            ./scripts/feeds update -a
+            ./scripts/feeds install -a
+            
+            # Переходим к копированию пакета
+            echo "Используем исходный код OpenWrt"
+            SDK_MODE="source"
           }
           
-          # Распаковываем SDK
-          tar -xf openwrt-sdk.tar.xz
-          mv openwrt-sdk-* openwrt_sdk
-          cd openwrt_sdk
-
-          # Обновляем feeds
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
+          if [[ -f "openwrt-sdk.tar.xz" ]]; then
+            # Распаковываем SDK
+            tar -xf openwrt-sdk.tar.xz
+            mv openwrt-sdk-* openwrt_sdk
+            cd openwrt_sdk
+            SDK_MODE="sdk"
+            
+            # Обновляем feeds для SDK
+            ./scripts/feeds update -a
+            ./scripts/feeds install -a
+          fi
 
           echo "Копируем код пакета ${PACKAGE_NAME}..."
           mkdir -p package/${PACKAGE_NAME}
@@ -121,25 +128,57 @@ jobs:
 
           echo "" > .config
           
-          # Простая конфигурация для SDK
-          echo "CONFIG_DEVEL=y" >> .config
-          echo "CONFIG_TOOLCHAINOPTS=y" >> .config
-          echo "CONFIG_PACKAGE_${PACKAGE_NAME//-/_}=m" >> .config
+          # Конфигурация зависит от режима (SDK или исходный код)
+          if [[ "$SDK_MODE" == "sdk" ]]; then
+            # Для SDK - минимальная конфигурация
+            echo "CONFIG_DEVEL=y" >> .config
+            echo "CONFIG_PACKAGE_${PACKAGE_NAME//-/_}=m" >> .config
+            echo "CONFIG_PACKAGE_curl=y" >> .config
+            echo "CONFIG_PACKAGE_ca_certificates=y" >> .config
+          else
+            # Для исходного кода - полная конфигурация target
+            if [[ "${TARGET_ARCH_INPUT}" == "mediatek/filogic" ]]; then
+              echo "CONFIG_TARGET_mediatek=y" >> .config
+              echo "CONFIG_TARGET_mediatek_filogic=y" >> .config
+              echo "CONFIG_TARGET_BOARD=\"filogic\"" >> .config
+            elif [[ "${TARGET_ARCH_INPUT}" == "x86/64" ]]; then
+              echo "CONFIG_TARGET_x86=y" >> .config
+              echo "CONFIG_TARGET_x86_64=y" >> .config
+              echo "CONFIG_TARGET_BOARD=\"x86\"" >> .config
+            fi
+            
+            # Отключаем ненужное для быстрой сборки
+            echo "CONFIG_ALL_KMODS=n" >> .config
+            echo "CONFIG_ALL_NONSHARED=n" >> .config
+            echo "CONFIG_SIGNED_PACKAGES=n" >> .config
+            echo "CONFIG_CLEAN_IPKG=y" >> .config
+            
+            # Включаем только наш пакет
+            echo "CONFIG_PACKAGE_${PACKAGE_NAME//-/_}=m" >> .config
+            echo "CONFIG_PACKAGE_curl=y" >> .config
+            echo "CONFIG_PACKAGE_ca_certificates=y" >> .config
+          fi
           
-          # Зависимости
-          echo "CONFIG_PACKAGE_curl=y" >> .config
-          echo "CONFIG_PACKAGE_ca_certificates=y" >> .config
-          
+          # Применяем конфигурацию неинтерактивно
           make defconfig V=s
+          
+          # Отладочная информация
+          echo "📋 Финальная конфигурация:"
+          grep -E "CONFIG_TARGET|CONFIG_PACKAGE_${PACKAGE_NAME}" .config || echo "Конфигурация пакета не найдена"
+          
+          echo "📁 Структура package/${PACKAGE_NAME}:"
+          find package/${PACKAGE_NAME} -type f | head -20
 
       - name: Compile the package
         id: compile_step
         run: |
           cd openwrt_sdk
           
-          # Проверяем, есть ли готовый toolchain
-          if [[ -d "staging_dir/toolchain-"* ]]; then
-            echo "✅ Используем готовый SDK"
+          echo "Режим сборки: ${SDK_MODE:-unknown}"
+          
+          # Различные стратегии компиляции
+          if [[ "${SDK_MODE}" == "sdk" ]]; then
+            echo "🔨 Сборка с использованием SDK"
             if make package/${PACKAGE_NAME}/compile V=s -j$(nproc); then
               echo "status=success" >> $GITHUB_OUTPUT
             else
@@ -147,15 +186,23 @@ jobs:
               exit 1
             fi
           else
-            echo "⚠️ SDK не найден, пробуем минимальную сборку"
-            # Минимальная сборка только пакета без toolchain
-            if make package/${PACKAGE_NAME}/prepare V=s && \
-               make package/${PACKAGE_NAME}/compile V=s -j1; then
+            echo "🔨 Сборка из исходного кода"
+            # Для исходного кода - собираем только toolchain и наш пакет
+            if make tools/install V=s -j$(nproc) && \
+               make toolchain/install V=s -j$(nproc) && \
+               make package/${PACKAGE_NAME}/compile V=s -j$(nproc); then
               echo "status=success" >> $GITHUB_OUTPUT
             else
-              echo "❌ Сборка не удалась"
-              echo "status=failure" >> $GITHUB_OUTPUT
-              exit 1
+              echo "❌ Полная сборка не удалась, пробуем минимальную"
+              # Попытка минимальной сборки
+              if make package/${PACKAGE_NAME}/download V=s && \
+                 make package/${PACKAGE_NAME}/prepare V=s && \
+                 make package/${PACKAGE_NAME}/compile V=s -j1; then
+                echo "status=success" >> $GITHUB_OUTPUT
+              else
+                echo "status=failure" >> $GITHUB_OUTPUT
+                exit 1
+              fi
             fi
           fi
 
