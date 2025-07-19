@@ -147,7 +147,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           # Nome do artefato que será exibido no GitHub
-          name: ${{ env.PACKAGE_NAME }}-package-${{ env.OPENWRT_VERSION }}-${{ env.TARGET_ARCH_INPUT//\//_ }}
+          name: ${{ env.PACKAGE_NAME }}-package-${{ env.OPENWRT_VERSION }}-${{ env.TARGET_ARCH_INPUT }}
           # Caminhos para os arquivos a serem incluídos no artefato
           # Procura por .ipk e .apk para cobrir ambos os formatos
           path: |
