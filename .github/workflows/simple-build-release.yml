@@ -56,8 +56,8 @@ jobs:
           - aarch64_cortex-a53  # Для вашего Xiaomi AX3000T
           - aarch64_cortex-a72
           - aarch64_generic
-          - arm_cortex-a7_neon-vfpv4
-          - arm_cortex-a9
+          # - arm_cortex-a7_neon-vfpv4
+          # - arm_cortex-a9
           - mips_24kc
           - mipsel_24kc
           - x86_64
