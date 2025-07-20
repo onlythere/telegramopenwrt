@@ -101,10 +101,8 @@ EOF
           chmod +x package/control/postinst package/control/prerm
 
           cd package
-          
-          tar --format=gnu --numeric-owner --owner=0 --group=0 -czf ../data.tar.gz data/
-          tar --format=gnu --numeric-owner --owner=0 --group=0 -czf ../control.tar.gz control/
-
+          tar --numeric-owner --owner=0 --group=0 -czf ../data.tar.gz data/
+          tar --numeric-owner --owner=0 --group=0 -czf ../control.tar.gz control/
           echo -n "2.0\n" > ../debian-binary
           cd ..
 
@@ -184,7 +182,7 @@ EOF
           name: "Telegram OpenWrt Scripts ${{ steps.tag_name.outputs.tag }}"
           body: |
             ## 🤖 Telegram OpenWrt Scripts ${{ steps.tag_name.outputs.tag }}
-            
+
             ### 🚀 Автоматическая установка
             ```bash
             echo 'src/gz telegramopenwrt https://github.com/onlythere/telegramopenwrt/releases/latest/download' >> /etc/opkg/customfeeds.conf
