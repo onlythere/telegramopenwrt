@@ -9,7 +9,7 @@ PKG_LICENSE:=GPL-2.0
 
 include $(INCLUDE_DIR)/package.mk
 
-define Package/telegram-openwrt
+define Package/telegramopenwrt
   SECTION:=net
   CATEGORY:=Network
   TITLE:=Telegram BOT for openwrt
@@ -18,14 +18,14 @@ define Package/telegram-openwrt
   TITLE:=Telegram for openwrt BOT
 endef
 
-define Package/telegram-openwrt/description
+define Package/telegramopenwrt/description
   Telegram for use in openwrt. Its a BOT
   that executes selected commands in your router.
   Version: $(PKG_VERSION)-$(PKG_RELEASE)
   Info   : https://github.com/alexwbaule/telegramopenwrt
 endef
 
-define Package/telegram-openwrt/conffiles
+define Package/telegramopenwrt/conffiles
 /etc/config/telegramopenwrt
 endef
 
@@ -35,7 +35,7 @@ endef
 define Build/Compile
 endef
 
-define Package/telegram-openwrt/install
+define Package/telegramopenwrt/install
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./etc/init.d/telegram_bot \
 			./etc/init.d/lanports \
@@ -201,7 +201,7 @@ define Package/telegram-openwrt/install
 		$(1)/sbin/
 endef
 
-define Package/telegram-openwrt/postinst
+define Package/telegramopenwrt/postinst
 #!/bin/sh
 if [ -z "$${IPKG_INSTROOT}" ]; then
 	/etc/init.d/telegram_bot enable
@@ -214,7 +214,7 @@ fi
 exit 0
 endef
 
-define Package/telegram-openwrt/prerm
+define Package/telegramopenwrt/prerm
 #!/bin/sh
 if [ -n "$${IPKG_INSTROOT}" ]; then
 	/etc/init.d/telegram_bot stop
@@ -227,4 +227,4 @@ fi
 exit 0
 endef
 
-$(eval $(call BuildPackage,telegram-openwrt))
+$(eval $(call BuildPackage,telegramopenwrt))
