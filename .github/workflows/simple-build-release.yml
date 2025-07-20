@@ -1,48 +1,4 @@
-pre-release:
-    if: github.event_name != 'pull_request' && github.ref_name == 'master'
-    needs: [build-openwrt]
-    permissions:
-      contents: write
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
-
-      - name: Generate package feed
-        run: |
-          mkdir -p repo/packages
-          
-          # Ищем все .ipk файлы (правильная маска)
-          find . -name "telegramopenwrt*.ipk" -exec cp {} repo/packages/ \;
-          
-          cd repo/packages
-          
-          # Проверяем что файлы найдены
-          if [ ! -f *.ipk ] 2>/dev/null; then
-            echo "❌ Нет .ipk файлов для создания репозитория"
-            ls -la
-            exit 1
-          fi
-          
-          echo "📦 Найденные пакеты:"
-          ls -la *.ipk
-          
-          # Устанавливаем opkg-utils если нужно
-          if ! command -v opkg-make-index >/dev/null 2>&1; then
-            sudo apt-get update && sudo apt-get install -y opkg-utils
-          fi
-          
-          # Создаем индекс пакетов
-          opkg-make-index -m . > Packages
-          gzip -k Packages
-          
-          # Создаем HTML страницу
-          cat > index.html << 'EOF'
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Telegram OpenWrt Packages</title>
-    <style>body{font-family:Arial,sans-serif;margin:40px;background:#f5f5f5}.container{max-width:800px;margin:0 auto;background:white;padding:30px;border-radius:10px;box-shadow:0 2px 10px rgba(0,0,0,0.1)}.code{background:#2d3748;color:#e2e8f0;padding:15px;border-name: CI
+name: CI
 
 on:
   push:
