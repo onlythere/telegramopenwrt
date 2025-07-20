@@ -65,52 +65,63 @@ jobs:
 
           DATA_SIZE=$(du -sb package/data | cut -f1)
 
-          cat > package/control/control <<EOF
-Package: $PACKAGE_NAME
-Version: $VERSION
-Architecture: $ARCH
-Depends: curl, ca-certificates
-Section: utils
-Priority: optional
-Maintainer: onlythere
-License: GPL-2.0
-Source: github.com/onlythere/telegramopenwrt
-Installed-Size: $DATA_SIZE
-Description: Telegram Scripts for OpenWrt - Manage and get information on OpenWrt routers via Telegram bot
-EOF
+          # Создаем control файл
+          cat > package/control/control << 'CONTROL_EOF'
+          Package: telegramopenwrt
+          Version: $VERSION
+          Architecture: $ARCH
+          Depends: curl, ca-certificates
+          Section: utils
+          Priority: optional
+          Maintainer: onlythere
+          License: GPL-2.0
+          Source: github.com/onlythere/telegramopenwrt
+          Installed-Size: $DATA_SIZE
+          Description: Telegram Scripts for OpenWrt - Manage and get information on OpenWrt routers via Telegram bot
+          CONTROL_EOF
 
-          cat > package/control/postinst << 'EOF'
-#!/bin/sh
-echo "Настройка Telegram OpenWrt..."
-chmod +x /sbin/* 2>/dev/null || true
-chmod +x /etc/init.d/* 2>/dev/null || true
-[ -f "/etc/init.d/telegram_bot" ] && /etc/init.d/telegram_bot enable
-[ -f "/etc/init.d/lanports" ] && /etc/init.d/lanports enable
-[ -f "/etc/init.d/hosts_scan" ] && /etc/init.d/hosts_scan enable
-echo "🤖 Telegram OpenWrt установлен!"
-echo "Настройте токен в /etc/config/telegramopenwrt"
-EOF
+          # Заменяем переменные в control файле
+          sed -i "s/\$VERSION/$VERSION/g" package/control/control
+          sed -i "s/\$ARCH/$ARCH/g" package/control/control
+          sed -i "s/\$DATA_SIZE/$DATA_SIZE/g" package/control/control
 
-          cat > package/control/prerm << 'EOF'
-#!/bin/sh
-[ -f "/etc/init.d/telegram_bot" ] && /etc/init.d/telegram_bot stop 2>/dev/null
-[ -f "/etc/init.d/lanports" ] && /etc/init.d/lanports stop 2>/dev/null
-[ -f "/etc/init.d/hosts_scan" ] && /etc/init.d/hosts_scan stop 2>/dev/null
-EOF
+          # Создаем postinst скрипт
+          cat > package/control/postinst << 'POSTINST_EOF'
+          #!/bin/sh
+          echo "Настройка Telegram OpenWrt..."
+          chmod +x /sbin/* 2>/dev/null || true
+          chmod +x /etc/init.d/* 2>/dev/null || true
+          [ -f "/etc/init.d/telegram_bot" ] && /etc/init.d/telegram_bot enable
+          [ -f "/etc/init.d/lanports" ] && /etc/init.d/lanports enable
+          [ -f "/etc/init.d/hosts_scan" ] && /etc/init.d/hosts_scan enable
+          echo "🤖 Telegram OpenWrt установлен!"
+          echo "Настройте токен в /etc/config/telegramopenwrt"
+          POSTINST_EOF
+
+          # Создаем prerm скрипт
+          cat > package/control/prerm << 'PRERM_EOF'
+          #!/bin/sh
+          [ -f "/etc/init.d/telegram_bot" ] && /etc/init.d/telegram_bot stop 2>/dev/null
+          [ -f "/etc/init.d/lanports" ] && /etc/init.d/lanports stop 2>/dev/null
+          [ -f "/etc/init.d/hosts_scan" ] && /etc/init.d/hosts_scan stop 2>/dev/null
+          PRERM_EOF
 
           chmod +x package/control/postinst package/control/prerm
 
+          # Создаем архивы
           cd package
           tar --numeric-owner --owner=0 --group=0 -czf ../data.tar.gz data/
           tar --numeric-owner --owner=0 --group=0 -czf ../control.tar.gz control/
           echo "2.0" > ../debian-binary
           cd ..
 
+          # Создаем IPK пакет
           rm -f "$PACKAGE_FILE"
           /usr/bin/ar rcs "$PACKAGE_FILE" debian-binary control.tar.gz data.tar.gz
 
           if [[ -f "$PACKAGE_FILE" ]]; then
-            echo "✅ Пакет создан успешно!"
+            echo "✅ Пакет создан успешно: $PACKAGE_FILE"
+            ls -lh "$PACKAGE_FILE"
             echo "package_file=$PACKAGE_FILE" >> "$GITHUB_OUTPUT"
             echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           else
@@ -147,17 +158,20 @@ EOF
           PACKAGE_FILE="${{ needs.build_package.outputs.package_file }}"
           VERSION="${{ needs.build_package.outputs.package_version }}"
 
-          echo "Package: telegramopenwrt" > Packages
-          echo "Version: $VERSION" >> Packages
-          echo "Depends: curl, ca-certificates" >> Packages
-          echo "Section: utils" >> Packages
-          echo "Architecture: aarch64_cortex-a53" >> Packages
-          echo "Installed-Size: $(stat -c%s "$PACKAGE_FILE")" >> Packages
-          echo "Filename: $PACKAGE_FILE" >> Packages
-          echo "Size: $(stat -c%s "$PACKAGE_FILE")" >> Packages
-          echo "SHA256sum: $(sha256sum "$PACKAGE_FILE" | cut -d' ' -f1)" >> Packages
-          echo "Description: Telegram Scripts for OpenWrt" >> Packages
-          echo "" >> Packages
+          # Создаем Packages индекс
+          cat > Packages << PACKAGES_EOF
+          Package: telegramopenwrt
+          Version: $VERSION
+          Depends: curl, ca-certificates
+          Section: utils
+          Architecture: aarch64_cortex-a53
+          Installed-Size: $(stat -c%s "$PACKAGE_FILE")
+          Filename: $PACKAGE_FILE
+          Size: $(stat -c%s "$PACKAGE_FILE")
+          SHA256sum: $(sha256sum "$PACKAGE_FILE" | cut -d' ' -f1)
+          Description: Telegram Scripts for OpenWrt
+
+          PACKAGES_EOF
 
           gzip -c Packages > Packages.gz
 
@@ -197,8 +211,7 @@ EOF
             3. Запустите: `/etc/init.d/telegram_bot start`
 
             ---
-            **Архитектура:** aarch64_cortex-a53 (Xiaomi AX3000T и аналогичные)  
-            **Размер:** $(stat -c%s packages/${{ needs.build_package.outputs.package_file }} | numfmt --to=iec-i)B
+            **Архитектура:** aarch64_cortex-a53 (Xiaomi AX3000T и аналогичные)
           files: |
             packages/*.ipk
             packages/Packages
