@@ -101,8 +101,10 @@ EOF
           chmod +x package/control/postinst package/control/prerm
 
           cd package
-          tar --numeric-owner --owner=0 --group=0 -czf ../data.tar.gz data/
-          tar --numeric-owner --owner=0 --group=0 -czf ../control.tar.gz control/
+          
+          tar --format=gnu --numeric-owner --owner=0 --group=0 -czf ../data.tar.gz data/
+          tar --format=gnu --numeric-owner --owner=0 --group=0 -czf ../control.tar.gz control/
+
           echo -n "2.0\n" > ../debian-binary
           cd ..
 
