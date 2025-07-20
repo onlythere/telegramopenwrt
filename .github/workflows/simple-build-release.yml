@@ -77,81 +77,119 @@ jobs:
           # Создаем правильную структуру пакета для OpenWrt
           mkdir -p telegramopenwrt
           
-          # Создаем Makefile в папке пакета
-          cat > telegramopenwrt/Makefile << 'MAKEFILE_EOF'
-          include $(TOPDIR)/rules.mk
+          # Используем ваш существующий Makefile, но исправляем имя пакета
+          cp Makefile telegramopenwrt/ 2>/dev/null || {
+            # Если Makefile нет, создаем на основе вашего
+            cat > telegramopenwrt/Makefile << 'MAKEFILE_EOF'
+include $(TOPDIR)/rules.mk
 
-          PKG_NAME:=telegramopenwrt
-          PKG_VERSION:=1.0.0
-          PKG_RELEASE:=1
+PKG_NAME:=telegramopenwrt
 
-          PKG_MAINTAINER:=onlythere
-          PKG_LICENSE:=GPL-2.0
+PKG_VERSION:=1.1.1
+PKG_RELEASE:=1
 
-          include $(INCLUDE_DIR)/package.mk
+PKG_LICENSE:=GPL-2.0
 
-          define Package/telegramopenwrt
-            SECTION:=utils
-            CATEGORY:=Utilities
-            TITLE:=Telegram Scripts for OpenWrt
-            DEPENDS:=+curl +ca-certificates
-            PKGARCH:=all
-          endef
+include $(INCLUDE_DIR)/package.mk
 
-          define Package/telegramopenwrt/description
-            Telegram Scripts for OpenWrt - Manage and get information on OpenWrt routers via Telegram bot
-          endef
+define Package/telegramopenwrt
+	SECTION:=net
+	CATEGORY:=Network
+	TITLE:=Telegram BOT for openwrt
+	URL:=https://github.com/onlythere/telegramopenwrt
+	PKGARCH:=all
+	TITLE:=Telegram for openwrt BOT
+endef
 
-          define Build/Prepare
-          endef
+define Package/telegramopenwrt/description
+	Telegram for use in openwrt. Its a BOT
+	that executes selected commands in your router.
+	Version: $(PKG_VERSION)-$(PKG_RELEASE)
+	Info   : https://github.com/onlythere/telegramopenwrt
+endef
 
-          define Build/Configure
-          endef
+define Package/telegramopenwrt/conffiles
+/etc/config/telegramopenwrt
+endef
 
-          define Build/Compile
-          endef
+define Build/Configure
+endef
 
-          define Package/telegramopenwrt/install
-            $(INSTALL_DIR) $(1)/etc/config
-            $(INSTALL_DIR) $(1)/etc/init.d  
-            $(INSTALL_DIR) $(1)/sbin
-            $(INSTALL_DIR) $(1)/usr/lib/telegramopenwrt
+define Build/Compile
+endef
 
-            # Копируем файлы из исходной папки
-            if [ -d "$(PKG_BUILD_DIR)/../../../etc" ]; then \
-              $(CP) $(PKG_BUILD_DIR)/../../../etc/* $(1)/etc/ 2>/dev/null || true; \
-            fi
-            if [ -d "$(PKG_BUILD_DIR)/../../../sbin" ]; then \
-              $(INSTALL_BIN) $(PKG_BUILD_DIR)/../../../sbin/* $(1)/sbin/ 2>/dev/null || true; \
-            fi
-            if [ -d "$(PKG_BUILD_DIR)/../../../usr" ]; then \
-              $(CP) $(PKG_BUILD_DIR)/../../../usr/* $(1)/usr/ 2>/dev/null || true; \
-            fi
-          endef
+define Package/telegramopenwrt/install
+	$(INSTALL_DIR) $(1)/etc/init.d
+	$(INSTALL_BIN) ./etc/init.d/telegram_bot \
+			./etc/init.d/lanports \
+			./etc/init.d/hosts_scan \
+		$(1)/etc/init.d
 
-          define Package/telegramopenwrt/postinst
-          #!/bin/sh
-          # Устанавливаем права
-          chmod +x /sbin/* 2>/dev/null || true
-          chmod +x /etc/init.d/* 2>/dev/null || true
+	$(INSTALL_DIR) $(1)/etc/config
+	$(INSTALL_CONF) ./etc/config/telegramopenwrt \
+		$(1)/etc/config/telegramopenwrt
+	
+	$(INSTALL_DIR) $(1)/etc/telegramopenwrt
+	$(INSTALL_CONF) ./etc/telegramopenwrt/macaddr.ignore \
+		$(1)/etc/telegramopenwrt/macaddr.ignore
+
+	$(INSTALL_DIR) $(1)/usr/share/telegramopenwrt
+	echo "$(PKG_VERSION)-$(PKG_RELEASE)" > $(1)/usr/share/telegramopenwrt/version
+	
+	$(INSTALL_DIR) $(1)/usr/lib/telegramopenwrt/plugins/actions
+	$(INSTALL_BIN) ./usr/lib/telegramopenwrt/plugins/actions/* \
+		$(1)/usr/lib/telegramopenwrt/plugins/actions
+	
+	$(INSTALL_DIR) $(1)/usr/lib/telegramopenwrt/plugins/ctx
+	$(INSTALL_BIN) ./usr/lib/telegramopenwrt/plugins/ctx/* \
+		$(1)/usr/lib/telegramopenwrt/plugins/ctx
+	
+	$(INSTALL_DIR) $(1)/usr/lib/telegramopenwrt/plugins/help
+	$(INSTALL_DATA) ./usr/lib/telegramopenwrt/plugins/help/* \
+		$(1)/usr/lib/telegramopenwrt/plugins/help
+
+	$(INSTALL_DIR) $(1)/usr/lib/telegramopenwrt/plugins
+	$(INSTALL_BIN) ./usr/lib/telegramopenwrt/plugins/* \
+		$(1)/usr/lib/telegramopenwrt/plugins
+
+	$(INSTALL_DIR) $(1)/sbin
+	$(INSTALL_BIN) ./sbin/* \
+		$(1)/sbin/
+endef
+
+define Package/telegramopenwrt/postinst
+#!/bin/sh
+if [ -z "${IPKG_INSTROOT}" ]; then
+	/etc/init.d/telegram_bot enable
+	/etc/init.d/lanports enable
+	/etc/init.d/hosts_scan enable
+	/etc/init.d/telegram_bot start
+	/etc/init.d/lanports start
+	/etc/init.d/hosts_scan start
+fi
+exit 0
+endef
+
+define Package/telegramopenwrt/prerm
+#!/bin/sh
+if [ -z "${IPKG_INSTROOT}" ]; then
+	/etc/init.d/telegram_bot stop
+	/etc/init.d/lanports stop
+	/etc/init.d/hosts_scan stop
+	/etc/init.d/telegram_bot disable
+	/etc/init.d/lanports disable
+	/etc/init.d/hosts_scan disable
+fi
+exit 0
+endef
+
+$(eval $(call BuildPackage,telegramopenwrt))
+MAKEFILE_EOF
+          }
           
-          # Включаем сервисы
-          [ -f "/etc/init.d/telegram_bot" ] && /etc/init.d/telegram_bot enable 2>/dev/null || true
-          [ -f "/etc/init.d/lanports" ] && /etc/init.d/lanports enable 2>/dev/null || true
-          [ -f "/etc/init.d/hosts_scan" ] && /etc/init.d/hosts_scan enable 2>/dev/null || true
-          
-          echo "Telegram OpenWrt установлен! Настройте токен в /etc/config/telegramopenwrt"
-          endef
-
-          define Package/telegramopenwrt/prerm
-          #!/bin/sh
-          [ -f "/etc/init.d/telegram_bot" ] && /etc/init.d/telegram_bot stop 2>/dev/null || true
-          [ -f "/etc/init.d/lanports" ] && /etc/init.d/lanports stop 2>/dev/null || true
-          [ -f "/etc/init.d/hosts_scan" ] && /etc/init.d/hosts_scan stop 2>/dev/null || true
-          endef
-
-          $(eval $(call BuildPackage,telegramopenwrt))
-          MAKEFILE_EOF
+          # Исправляем имя пакета в Makefile если нужно
+          sed -i 's/telegram-openwrt/telegramopenwrt/g' telegramopenwrt/Makefile
+          sed -i 's/enabled/enable/g' telegramopenwrt/Makefile
           
           # Копируем исходные файлы в папку пакета
           cp -r etc sbin usr telegramopenwrt/ 2>/dev/null || true

@@ -1,6 +1,6 @@
 include $(TOPDIR)/rules.mk
 
-PKG_NAME:=telegram-openwrt
+PKG_NAME:=telegramopenwrt
 
 PKG_VERSION:=1.1.1
 PKG_RELEASE:=1
@@ -204,9 +204,9 @@ endef
 define Package/telegram-openwrt/postinst
 #!/bin/sh
 if [ -z "$${IPKG_INSTROOT}" ]; then
-	/etc/init.d/telegram_bot enabled
-	/etc/init.d/lanports enabled
-	/etc/init.d/hosts_scan enabled
+	/etc/init.d/telegram_bot enable
+	/etc/init.d/lanports enable
+	/etc/init.d/hosts_scan enable
 	/etc/init.d/telegram_bot start
 	/etc/init.d/lanports start
 	/etc/init.d/hosts_scan start
