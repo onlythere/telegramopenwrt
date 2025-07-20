@@ -33,13 +33,13 @@ jobs:
       - name: Set version
         id: version
         run: |
-          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
             VERSION=${GITHUB_REF#refs/tags/v}
-            echo "version=$VERSION" >> $GITHUB_OUTPUT
+            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           elif [[ -n "${{ github.event.inputs.version }}" ]]; then
-            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
           else
-            echo "version=1.0.0-1" >> $GITHUB_OUTPUT
+            echo "version=1.0.0-1" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Install OpenWrt build tools
@@ -103,7 +103,7 @@ EOF
           cd package
           tar --numeric-owner --owner=0 --group=0 -czf ../data.tar.gz data/
           tar --numeric-owner --owner=0 --group=0 -czf ../control.tar.gz control/
-          echo -n "2.0\n" > ../debian-binary
+          echo "2.0" > ../debian-binary
           cd ..
 
           rm -f "$PACKAGE_FILE"
@@ -111,8 +111,8 @@ EOF
 
           if [[ -f "$PACKAGE_FILE" ]]; then
             echo "✅ Пакет создан успешно!"
-            echo "package_file=$PACKAGE_FILE" >> $GITHUB_OUTPUT
-            echo "version=$VERSION" >> $GITHUB_OUTPUT
+            echo "package_file=$PACKAGE_FILE" >> "$GITHUB_OUTPUT"
+            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           else
             echo "❌ Ошибка создания пакета"
             exit 1
@@ -129,11 +129,7 @@ EOF
     name: Create Release
     needs: build_package
     runs-on: ubuntu-22.04
-    if: |
-      needs.build_package.result == 'success' && (
-        startsWith(github.ref, 'refs/tags/v') ||
-        github.event.inputs.create_release == 'true'
-      )
+    if: ${{ needs.build_package.result == 'success' && (startsWith(github.ref, 'refs/tags/v') || github.event.inputs.create_release == 'true') }}
 
     steps:
       - name: Checkout code
@@ -168,11 +164,10 @@ EOF
       - name: Get tag name
         id: tag_name
         run: |
-          if [[ "${{ github.ref_type }}" == "tag" ]]; then
-            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
           else
-            tag="v${{ needs.build_package.outputs.package_version }}"
-            echo "tag=$tag" >> $GITHUB_OUTPUT
+            echo "tag=v${{ needs.build_package.outputs.package_version }}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Create Release
