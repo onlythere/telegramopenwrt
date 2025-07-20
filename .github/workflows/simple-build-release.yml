@@ -58,9 +58,9 @@ jobs:
           - aarch64_generic
           # - arm_cortex-a7_neon-vfpv4
           # - arm_cortex-a9
-          - mips_24kc
-          - mipsel_24kc
-          - x86_64
+          # - mips_24kc
+          # - mipsel_24kc
+          # - x86_64
     container:
       image: openwrt/sdk:${{ matrix.arch }}-${{ matrix.branch }}
       options: --user root
