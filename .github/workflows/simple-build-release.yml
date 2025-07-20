@@ -54,7 +54,7 @@ jobs:
           - openwrt-24.10
         arch:
           - aarch64_cortex-a53  # Для вашего Xiaomi AX3000T
-          - aarch64_cortex-a72
+          # - aarch64_cortex-a72
           - aarch64_generic
           # - arm_cortex-a7_neon-vfpv4
           # - arm_cortex-a9
