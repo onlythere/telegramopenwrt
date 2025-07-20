@@ -1,222 +1,283 @@
-name: Build and Release Telegram OpenWrt Package
+name: CI
 
 on:
   push:
     branches:
       - master
-    tags:
-      - 'v*'
+    paths-ignore:
+      - '.editorconfig'
+      - '.gitignore'
+      - 'LICENSE'
+      - 'README.md'
   workflow_dispatch:
-    inputs:
-      create_release:
-        description: 'Создать релиз?'
-        type: boolean
-        default: false
-      version:
-        description: 'Версия пакета (например: 1.0.0-1)'
-        required: false
-        default: '1.0.0-1'
+  pull_request:
 
 jobs:
-  build_package:
-    name: Build Package
-    runs-on: ubuntu-22.04
-
+  prepare:
+    runs-on: ubuntu-latest
     outputs:
-      package_file: ${{ steps.build.outputs.package_file }}
-      package_version: ${{ steps.build.outputs.version }}
-
+      version: ${{ steps.gh.outputs.version }}
+      release: ${{ steps.gh.outputs.release }}
+      sha: ${{ steps.gh.outputs.sha }}
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set version
-        id: version
+      - name: GH
+        id: gh
+        env:
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
         run: |
-          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
-            VERSION=${GITHUB_REF#refs/tags/v}
-            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          elif [[ -n "${{ github.event.inputs.version }}" ]]; then
-            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          # Извлекаем версию из Makefile или устанавливаем по умолчанию
+          if [ -f "Makefile" ]; then
+            echo "version=$(cat Makefile | grep "PKG_VERSION" | head -1 | sed 's/.*:= *//' | sed 's/ *$//')" >> $GITHUB_OUTPUT
+            echo "release=$(cat Makefile | grep "PKG_RELEASE" | head -1 | sed 's/.*:= *//' | sed 's/ *$//')" >> $GITHUB_OUTPUT
           else
-            echo "version=1.0.0-1" >> "$GITHUB_OUTPUT"
+            echo "version=1.0.0" >> $GITHUB_OUTPUT
+            echo "release=1" >> $GITHUB_OUTPUT
           fi
 
-      - name: Install OpenWrt build tools
+          if [ "$GITHUB_EVENT_NAME" == "pull_request" ]; then
+            GITHUB_SHA=$(cat $GITHUB_EVENT_PATH | jq -r .pull_request.head.sha)
+          fi
+          echo "sha=$(echo ${GITHUB_SHA::7})" >> $GITHUB_OUTPUT
+          cat $GITHUB_OUTPUT
+
+  build-openwrt:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        branch:
+          - openwrt-24.10
+        arch:
+          - aarch64_cortex-a53  # Для вашего Xiaomi AX3000T
+          - aarch64_cortex-a72
+          - aarch64_generic
+          - arm_cortex-a7_neon-vfpv4
+          - arm_cortex-a9
+          - mips_24kc
+          - mipsel_24kc
+          - x86_64
+    container:
+      image: openwrt/sdk:${{ matrix.arch }}-${{ matrix.branch }}
+      options: --user root
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create Makefile if not exists
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          RELEASE: ${{ needs.prepare.outputs.release }}
+          SHA: ${{ needs.prepare.outputs.sha }}
         run: |
-          sudo apt-get update
-          sudo apt-get install -y binutils-multiarch build-essential
+          if [ ! -f "Makefile" ]; then
+            cat > Makefile << 'EOF'
+          include $(TOPDIR)/rules.mk
 
-      - name: Create IPK package (OpenWrt compatible)
-        id: build
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          PACKAGE_NAME="telegramopenwrt"
-          ARCH="aarch64_cortex-a53"
-          PACKAGE_FILE="${PACKAGE_NAME}_${VERSION}_${ARCH}.ipk"
+          PKG_NAME:=telegramopenwrt
+          PKG_VERSION:=$VERSION
+          PKG_RELEASE:=$RELEASE
 
-          echo "🔨 Создаем OpenWrt-совместимый пакет $PACKAGE_FILE"
+          PKG_MAINTAINER:=onlythere
+          PKG_LICENSE:=GPL-2.0
 
-          mkdir -p package/data package/control
+          include $(INCLUDE_DIR)/package.mk
 
-          [[ -d etc ]] && cp -r etc package/data/
-          [[ -d sbin ]] && cp -r sbin package/data/
-          [[ -d usr ]] && cp -r usr package/data/
+          define Package/telegramopenwrt
+            SECTION:=utils
+            CATEGORY:=Utilities
+            TITLE:=Telegram Scripts for OpenWrt
+            DEPENDS:=+curl +ca-certificates
+            PKGARCH:=all
+          endef
 
-          DATA_SIZE=$(du -sb package/data | cut -f1)
+          define Package/telegramopenwrt/description
+            Telegram Scripts for OpenWrt - Manage and get information on OpenWrt routers via Telegram bot
+          endef
 
-          # Создаем control файл
-          cat > package/control/control << 'CONTROL_EOF'
-          Package: telegramopenwrt
-          Version: $VERSION
-          Architecture: $ARCH
-          Depends: curl, ca-certificates
-          Section: utils
-          Priority: optional
-          Maintainer: onlythere
-          License: GPL-2.0
-          Source: github.com/onlythere/telegramopenwrt
-          Installed-Size: $DATA_SIZE
-          Description: Telegram Scripts for OpenWrt - Manage and get information on OpenWrt routers via Telegram bot
-          CONTROL_EOF
+          define Build/Compile
+          endef
 
-          # Заменяем переменные в control файле
-          sed -i "s/\$VERSION/$VERSION/g" package/control/control
-          sed -i "s/\$ARCH/$ARCH/g" package/control/control
-          sed -i "s/\$DATA_SIZE/$DATA_SIZE/g" package/control/control
+          define Package/telegramopenwrt/install
+            $(INSTALL_DIR) $(1)/etc/config
+            $(INSTALL_DIR) $(1)/etc/init.d
+            $(INSTALL_DIR) $(1)/sbin
+            $(INSTALL_DIR) $(1)/usr/lib/telegramopenwrt
+            
+            # Установка конфигурации
+            if [ -d "./etc/config" ]; then \
+              $(INSTALL_CONF) ./etc/config/* $(1)/etc/config/; \
+            fi
+            
+            # Установка init скриптов
+            if [ -d "./etc/init.d" ]; then \
+              $(INSTALL_BIN) ./etc/init.d/* $(1)/etc/init.d/; \
+            fi
+            
+            # Установка исполняемых файлов
+            if [ -d "./sbin" ]; then \
+              $(INSTALL_BIN) ./sbin/* $(1)/sbin/; \
+            fi
+            
+            # Установка библиотек и плагинов
+            if [ -d "./usr" ]; then \
+              $(CP) ./usr/* $(1)/usr/; \
+            fi
+          endef
 
-          # Создаем postinst скрипт
-          cat > package/control/postinst << 'POSTINST_EOF'
+          define Package/telegramopenwrt/postinst
           #!/bin/sh
-          echo "Настройка Telegram OpenWrt..."
-          chmod +x /sbin/* 2>/dev/null || true
-          chmod +x /etc/init.d/* 2>/dev/null || true
+          # Включаем сервисы
           [ -f "/etc/init.d/telegram_bot" ] && /etc/init.d/telegram_bot enable
           [ -f "/etc/init.d/lanports" ] && /etc/init.d/lanports enable
           [ -f "/etc/init.d/hosts_scan" ] && /etc/init.d/hosts_scan enable
-          echo "🤖 Telegram OpenWrt установлен!"
-          echo "Настройте токен в /etc/config/telegramopenwrt"
-          POSTINST_EOF
+          echo "Telegram OpenWrt установлен! Настройте токен в /etc/config/telegramopenwrt"
+          endef
 
-          # Создаем prerm скрипт
-          cat > package/control/prerm << 'PRERM_EOF'
+          define Package/telegramopenwrt/prerm
           #!/bin/sh
           [ -f "/etc/init.d/telegram_bot" ] && /etc/init.d/telegram_bot stop 2>/dev/null
           [ -f "/etc/init.d/lanports" ] && /etc/init.d/lanports stop 2>/dev/null
           [ -f "/etc/init.d/hosts_scan" ] && /etc/init.d/hosts_scan stop 2>/dev/null
-          PRERM_EOF
+          endef
 
-          chmod +x package/control/postinst package/control/prerm
+          $(eval $(call BuildPackage,telegramopenwrt))
+          EOF
+          
+            # Заменяем переменные
+            sed -i "s/\$VERSION/$VERSION/g" Makefile
+            sed -i "s/\$RELEASE/$RELEASE/g" Makefile
+          fi
 
-          # Создаем архивы
-          cd package
-          tar --numeric-owner --owner=0 --group=0 -czf ../data.tar.gz data/
-          tar --numeric-owner --owner=0 --group=0 -czf ../control.tar.gz control/
-          echo "2.0" > ../debian-binary
-          cd ..
+      - name: Initialize SDK
+        id: init_sdk
+        working-directory: /builder
+        run: |
+          HOME=/builder ./setup.sh
 
-          # Создаем IPK пакет
-          rm -f "$PACKAGE_FILE"
-          /usr/bin/ar rcs "$PACKAGE_FILE" debian-binary control.tar.gz data.tar.gz
-
-          if [[ -f "$PACKAGE_FILE" ]]; then
-            echo "✅ Пакет создан успешно: $PACKAGE_FILE"
-            ls -lh "$PACKAGE_FILE"
-            echo "package_file=$PACKAGE_FILE" >> "$GITHUB_OUTPUT"
-            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+      - name: Build packages
+        id: build
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          RELEASE: ${{ needs.prepare.outputs.release }}
+          SHA: ${{ needs.prepare.outputs.sha }}
+        working-directory: /builder
+        run: |
+          echo "src-link telegramopenwrt $GITHUB_WORKSPACE" >> feeds.conf
+          cat feeds.conf
+          
+          ./scripts/feeds update telegramopenwrt
+          ./scripts/feeds install -a -p telegramopenwrt
+          
+          # Простая конфигурация
+          echo "CONFIG_PACKAGE_telegramopenwrt=m" > .config
+          make defconfig
+          
+          # Сборка пакета
+          make package/telegramopenwrt/compile V=s
+          
+          # Переименовываем пакет
+          PACKAGE_FILE=$(find ./bin -type f -name 'telegramopenwrt*.ipk' | head -1)
+          if [ -n "$PACKAGE_FILE" ]; then
+            mv "$PACKAGE_FILE" ./telegramopenwrt-$VERSION-$RELEASE-$SHA-${{ matrix.arch }}-${{ matrix.branch }}.ipk
+            echo "✅ Пакет создан: telegramopenwrt-$VERSION-$RELEASE-$SHA-${{ matrix.arch }}-${{ matrix.branch }}.ipk"
+            ls -la ./telegramopenwrt*.ipk
           else
-            echo "❌ Ошибка создания пакета"
+            echo "❌ Пакет не найден"
+            find ./bin -name "*.ipk" -ls
             exit 1
           fi
 
-      - name: Upload package artifact
+      - name: Upload packages
+        if: steps.build.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
-          name: telegramopenwrt-package-${{ steps.build.outputs.version }}
-          path: ${{ steps.build.outputs.package_file }}
+          name: telegramopenwrt-${{ matrix.branch }}-${{ matrix.arch }}
+          path: /builder/telegramopenwrt*.ipk
           if-no-files-found: error
 
-  create_release:
-    name: Create Release
-    needs: build_package
-    runs-on: ubuntu-22.04
-    if: ${{ needs.build_package.result == 'success' && (startsWith(github.ref, 'refs/tags/v') || github.event.inputs.create_release == 'true') }}
-
+  pre-release:
+    if: github.event_name != 'pull_request' && github.ref_name == 'master'
+    needs: [build-openwrt]
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Download package
+      - name: Download artifacts
         uses: actions/download-artifact@v4
-        with:
-          name: telegramopenwrt-package-${{ needs.build_package.outputs.package_version }}
-          path: ./packages
 
-      - name: Create package repository files
+      - name: Create package repository
         run: |
-          cd packages
-          PACKAGE_FILE="${{ needs.build_package.outputs.package_file }}"
-          VERSION="${{ needs.build_package.outputs.package_version }}"
-
+          # Создаем структуру репозитория
+          mkdir -p repo/packages
+          
+          # Копируем все .ipk файлы
+          find . -name "telegramopenwrt*.ipk" -exec cp {} repo/packages/ \;
+          
+          cd repo/packages
+          
           # Создаем Packages индекс
-          cat > Packages << PACKAGES_EOF
-          Package: telegramopenwrt
-          Version: $VERSION
-          Depends: curl, ca-certificates
-          Section: utils
-          Architecture: aarch64_cortex-a53
-          Installed-Size: $(stat -c%s "$PACKAGE_FILE")
-          Filename: $PACKAGE_FILE
-          Size: $(stat -c%s "$PACKAGE_FILE")
-          SHA256sum: $(sha256sum "$PACKAGE_FILE" | cut -d' ' -f1)
-          Description: Telegram Scripts for OpenWrt
-
-          PACKAGES_EOF
-
+          for ipk in *.ipk; do
+            if [ -f "$ipk" ]; then
+              echo "Package: telegramopenwrt"
+              echo "Version: $(echo $ipk | sed -n 's/telegramopenwrt-\([^-]*-[^-]*\)-.*/\1/p')"
+              echo "Architecture: $(echo $ipk | sed -n 's/.*-\([^-]*\)-openwrt.*/\1/p')"
+              echo "Depends: curl, ca-certificates"
+              echo "Section: utils"
+              echo "Filename: $ipk"
+              echo "Size: $(stat -c%s "$ipk")"
+              echo "SHA256sum: $(sha256sum "$ipk" | cut -d' ' -f1)"
+              echo "Description: Telegram Scripts for OpenWrt"
+              echo ""
+            fi
+          done > Packages
+          
+          # Сжимаем индекс
           gzip -c Packages > Packages.gz
+          
+          # Создаем HTML страницу
+          cat > index.html << 'HTML_EOF'
+          <!DOCTYPE html>
+          <html>
+          <head>
+              <title>Telegram OpenWrt Packages</title>
+              <style>body{font-family:Arial,sans-serif;margin:40px;background:#f5f5f5}.container{max-width:800px;margin:0 auto;background:white;padding:30px;border-radius:10px;box-shadow:0 2px 10px rgba(0,0,0,0.1)}.code{background:#2d3748;color:#e2e8f0;padding:15px;border-radius:5px;font-family:monospace;margin:15px 0}h1{color:#2d3748;border-bottom:3px solid #4299e1;padding-bottom:10px}</style>
+          </head>
+          <body>
+              <div class="container">
+                  <h1>🤖 Telegram OpenWrt Scripts</h1>
+                  <p>Автоматически собранные пакеты для управления OpenWrt через Telegram бота</p>
+                  
+                  <h2>🚀 Установка</h2>
+                  <div class="code">echo 'src/gz telegramopenwrt https://github.com/onlythere/telegramopenwrt/releases/download/continuous' >> /etc/opkg/customfeeds.conf<br>
+          opkg update<br>
+          opkg install telegramopenwrt</div>
+                  
+                  <h2>📦 Доступные пакеты</h2>
+                  <ul>
+          HTML_EOF
+          
+          for ipk in *.ipk; do
+            echo "<li><a href=\"$ipk\">$ipk</a></li>" >> index.html
+          done
+          
+          echo '</ul></div></body></html>' >> index.html
+          
+          cd ../..
 
-      - name: Get tag name
-        id: tag_name
-        run: |
-          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
-            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag=v${{ needs.build_package.outputs.package_version }}" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
+      - name: Upload assets
+        uses: slord399/action-automatic-releases@v1.0.1
         with:
-          tag_name: ${{ steps.tag_name.outputs.tag }}
-          name: "Telegram OpenWrt Scripts ${{ steps.tag_name.outputs.tag }}"
-          body: |
-            ## 🤖 Telegram OpenWrt Scripts ${{ steps.tag_name.outputs.tag }}
-
-            ### 🚀 Автоматическая установка
-            ```bash
-            echo 'src/gz telegramopenwrt https://github.com/onlythere/telegramopenwrt/releases/latest/download' >> /etc/opkg/customfeeds.conf
-            opkg update
-            opkg install telegramopenwrt
-            ```
-
-            ### 📥 Ручная установка
-            ```bash
-            wget -O telegramopenwrt.ipk https://github.com/onlythere/telegramopenwrt/releases/latest/download/${{ needs.build_package.outputs.package_file }}
-            opkg install telegramopenwrt.ipk
-            ```
-
-            ### ⚙️ Настройка после установки
-            1. Создайте бота у [@BotFather](https://t.me/BotFather)
-            2. Отредактируйте `/etc/config/telegramopenwrt`
-            3. Запустите: `/etc/init.d/telegram_bot start`
-
-            ---
-            **Архитектура:** aarch64_cortex-a53 (Xiaomi AX3000T и аналогичные)
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          automatic_release_tag: 'continuous'
+          prerelease: true
+          title: 'Development build'
           files: |
-            packages/*.ipk
-            packages/Packages
-            packages/Packages.gz
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            ./repo/packages/*.ipk
+            ./repo/packages/Packages
+            ./repo/packages/Packages.gz
+            ./repo/packages/index.html
